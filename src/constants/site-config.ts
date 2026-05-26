@@ -1,46 +1,164 @@
-type SiteConfig = {
-  title: string; // 网站标题名称（banner 上）
-  alternate?: string; // 网站英文短名
-  subtitle?: string; // 副标题
-  name: string; // 站点作者
-  description?: string; // 站点简介（一段话）
-  avatar?: string; // 站点头像 logo.png or url
-  showLogo?: boolean; // 是否显示 logo，否则用 alternate 当·logo
-  author?: string; // 文章作者
-  // theme
-  site: string; // 站点线上域名 用于 RSS 生成等
-  startYear?: number; // 站点创建年份
-  keywords?: string[]; // 站点关键词 SEO
-  featuredCategories?: {
-    link: string;
-    image: string;
-    label?: string;
-    description?: string;
-  }[];
+// Import YAML config directly - processed by @rollup/plugin-yaml
 
-  // 首页特殊系列配置
-  featuredSeries?: {
-    categoryName: string; // 分类名（如 '周刊'）
-    label?: string; // 显示名称（如 '前端周刊'）
-    enabled?: boolean; // 是否启用，默认 true
-    // 周刊详细信息
-    fullName?: string; // 完整名称
-    description?: string; // 描述
-    cover?: string; // 封面图
-    links?: {
-      github?: string; // GitHub 仓库
-      rss?: string; // RSS 订阅链接
-      chrome?: string; // Chrome 商店链接
-      docs?: string; // 文档链接
-    };
-  };
+import type {
+  AnalyticsConfig,
+  BangumiConfig,
+  BgmAudioGroup,
+  CommentConfig,
+  DevConfig,
+  FeaturedCategory,
+  FeaturedSeriesItem,
+  I18nConfig,
+  RouterItem,
+  SiteBasicConfig,
+} from '@lib/config/types';
+import { DEFAULT_TIMEZONE, isValidTimezone } from '@lib/timezone';
+import { createUmamiStatsConfig } from '@lib/umami-stats';
+import type { UmamiStatsConfig } from '@/types/umami-stats';
+import yamlConfig from '../../config/site.yaml';
+import { routers as baseRouters, isReservedSlug, RESERVED_ROUTES } from './router';
+
+/**
+ * Runtime site configuration
+ * Extends SiteBasicConfig with runtime-specific fields
+ */
+type SiteConfig = Omit<SiteBasicConfig, 'url'> & {
+  /** Site URL (mapped from SiteBasicConfig.url) */
+  site: string;
+  featuredCategories?: FeaturedCategory[];
+  /** Normalized array of featured series */
+  featuredSeries: FeaturedSeriesItem[];
 };
 
-// 社交媒体配置类型
+/**
+ * Type guard to check if an unknown value is a valid FeaturedSeriesItem
+ * @param value - The value to check
+ * @returns true if the value is a valid FeaturedSeriesItem
+ */
+function isFeaturedSeriesItem(value: unknown): value is FeaturedSeriesItem {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+
+  const item = value as Record<string, unknown>;
+
+  // Check required field: categoryName must be a non-empty string
+  if (typeof item.categoryName !== 'string' || item.categoryName.trim() === '') {
+    return false;
+  }
+
+  // Check optional but important fields
+  if (item.slug !== undefined && typeof item.slug !== 'string') {
+    return false;
+  }
+
+  if (item.label !== undefined && typeof item.label !== 'string') {
+    return false;
+  }
+
+  if (item.enabled !== undefined && typeof item.enabled !== 'boolean') {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Normalize featured series config to array format
+ * Supports both legacy single object and new array format
+ * Validates all series configurations at build time
+ */
+function normalizeFeaturedSeries(config: unknown): FeaturedSeriesItem[] {
+  if (!config) return [];
+
+  // Convert to array format
+  let items: unknown[];
+  if (Array.isArray(config)) {
+    items = config;
+  } else {
+    // Legacy single object format - convert to array with default slug
+    items = [config];
+  }
+
+  // Validate each item using type guard
+  const validatedItems: FeaturedSeriesItem[] = [];
+  for (const [index, item] of items.entries()) {
+    if (!isFeaturedSeriesItem(item)) {
+      const itemStr = JSON.stringify(item, null, 2);
+      throw new Error(
+        `Featured series configuration error: Item at index ${index} is not a valid FeaturedSeriesItem.\n` +
+          `Expected an object with at least a 'categoryName' string field.\n` +
+          `Received: ${itemStr}`,
+      );
+    }
+
+    // Add default slug for legacy configs
+    const slug = item.slug || yamlConfig.categoryMap?.[item.categoryName] || 'series';
+    validatedItems.push({ ...item, slug });
+  }
+
+  // Validate each series configuration
+  const slugSet = new Set<string>();
+
+  for (const item of validatedItems) {
+    const rawSlug = typeof item.slug === 'string' ? item.slug : '';
+    const normalizedSlug = rawSlug.trim().toLowerCase();
+
+    // Validate required fields
+    if (!normalizedSlug) {
+      throw new Error(
+        `Featured series configuration error: Missing or invalid "slug" field. ` + `Each series must have a non-empty slug.`,
+      );
+    }
+
+    if (!item.categoryName || typeof item.categoryName !== 'string' || item.categoryName.trim() === '') {
+      throw new Error(
+        `Featured series configuration error: Series "${item.slug}" is missing or has invalid "categoryName" field. ` +
+          `Each series must have a valid category name.`,
+      );
+    }
+
+    // Validate slug format (alphanumeric, hyphens, underscores only)
+    const slugPattern = /^[a-z0-9-_]+$/i;
+    if (!slugPattern.test(normalizedSlug)) {
+      throw new Error(
+        `Featured series configuration error: Invalid slug "${rawSlug}". ` +
+          `Slugs must contain only alphanumeric characters, hyphens, and underscores.`,
+      );
+    }
+
+    // Check for reserved slugs
+    if (isReservedSlug(normalizedSlug)) {
+      throw new Error(
+        `Featured series configuration error: Slug "${rawSlug}" conflicts with a reserved route. ` +
+          `Reserved routes are: ${Array.from(RESERVED_ROUTES).join(', ')}. ` +
+          `Please choose a different slug.`,
+      );
+    }
+
+    // Check for duplicate slugs
+    if (slugSet.has(normalizedSlug)) {
+      throw new Error(`Featured series configuration error: Duplicate slug "${rawSlug}". Each series must have a unique slug.`);
+    }
+    slugSet.add(normalizedSlug);
+    item.slug = normalizedSlug;
+
+    // Validate categoryName exists in categoryMap
+    if (yamlConfig.categoryMap && !yamlConfig.categoryMap[item.categoryName]) {
+      console.warn(
+        `[Warning] Featured series "${item.slug}": Category "${item.categoryName}" not found in categoryMap. ` +
+          `Consider adding it to config/site.yaml for proper URL mapping.`,
+      );
+    }
+  }
+
+  return validatedItems;
+}
+
 type SocialPlatform = {
   url: string;
   icon: string;
-  color: string; // default bg-primary/20
+  color: string;
 };
 
 type SocialConfig = {
@@ -62,105 +180,35 @@ type SocialConfig = {
   rss?: SocialPlatform;
 };
 
-// TODO: change to backend
-
-// https://shoka.lostyu.me/computer-science/note/theme-shoka-doc/config/
+// Map YAML config to existing types
 export const siteConfig: SiteConfig = {
-  title: '余弦の博客', // 网站名称
-  alternate: 'cosine', // 网站名称
-  subtitle: 'WA 的一声就哭了', // 副标题
-  name: 'cos', // 站点作者简称
-  description: '一个基于 Astro 的现代化博客主题', // 站点简介（一段话）
-  avatar: '/img/avatar.webp', // 站点头像 - 请替换 public/img/avatar.webp
-  showLogo: true, // 是否显示 svg logo 否则用 title
-  author: 'Author', // 作者名称 - 请修改为你的名字
-  site: 'https://koharu.cosine.ren', // 站点线上域名 - 部署后请修改为你的域名
-  startYear: 2024, // 站点创建年份
-  keywords: ['博客', 'Astro', '技术', '前端'], // SEO 关键词
-  featuredCategories: [
-    {
-      link: 'life',
-      label: '随笔',
-      image: '/img/cover/2.webp',
-      description: '生活记录、随想随笔',
-    },
-    {
-      link: 'note',
-      label: '笔记',
-      image: '/img/cover/4.webp',
-      description: '技术笔记、学习笔记',
-    },
-    {
-      link: 'note/front-end',
-      label: '前端',
-      image: '/img/cover/1.webp',
-      description: '前端技术相关',
-    },
-    {
-      link: 'tools',
-      label: '工具',
-      image: '/img/cover/11.webp',
-      description: '工具使用、效率提升',
-    },
-  ],
-  featuredSeries: {
-    categoryName: '周刊',
-    label: '我的周刊',
-    fullName: '我的技术周刊',
-    description: `这是周刊/系列文章功能的示例配置。
-
-你可以用它来发布定期更新的系列内容，如技术周刊、读书笔记系列等。
-
-设置 enabled: false 可以关闭此功能。`,
-    cover: '/img/weekly_header.webp',
-    enabled: true,
-    links: {
-      github: 'https://github.com/your-username/your-repo',
-      rss: '/rss.xml',
-    },
-  },
+  title: yamlConfig.site.title,
+  alternate: yamlConfig.site.alternate,
+  subtitle: yamlConfig.site.subtitle,
+  name: yamlConfig.site.name,
+  description: yamlConfig.site.description,
+  avatar: yamlConfig.site.avatar,
+  showLogo: yamlConfig.site.showLogo,
+  author: yamlConfig.site.author,
+  site: yamlConfig.site.url,
+  startYear: yamlConfig.site.startYear,
+  defaultOgImage: yamlConfig.site.defaultOgImage,
+  keywords: yamlConfig.site.keywords,
+  breadcrumbHome: yamlConfig.site.breadcrumbHome,
+  featuredCategories: yamlConfig.featuredCategories,
+  featuredSeries: normalizeFeaturedSeries(yamlConfig.featuredSeries),
+  enableSlugTransliteration: yamlConfig.site.enableSlugTransliteration,
 };
 
-// 社交媒体配置
-// 图标查询: https://icon-sets.iconify.design/ri/
-export const socialConfig: SocialConfig = {
-  github: {
-    url: 'https://github.com/your-username', // 替换为你的 GitHub 链接
-    icon: 'ri:github-fill',
-    color: '#191717',
-  },
-  email: {
-    url: 'mailto:your@email.com', // 替换为你的邮箱
-    icon: 'ri:mail-line',
-    color: '#55acd5',
-  },
-  rss: {
-    url: '/rss.xml',
-    icon: 'ri:rss-line',
-    color: '#ff6600',
-  },
-  // 以下是更多可选的社交平台配置示例，取消注释并修改即可启用：
-  // twitter: {
-  //   url: 'https://x.com/your-handle',
-  //   icon: 'ri:twitter-fill',
-  //   color: '#4b9ae4',
-  // },
-  // bilibili: {
-  //   url: 'https://space.bilibili.com/your-id',
-  //   icon: 'ri:bilibili-fill',
-  //   color: '#da708a',
-  // },
-  // zhihu: {
-  //   url: 'https://www.zhihu.com/people/your-id',
-  //   icon: 'ri:zhihu-fill',
-  //   color: '#1e88e5',
-  // },
-  // music: {
-  //   url: 'https://music.163.com/#/user/home?id=your-id',
-  //   icon: 'ri:netease-cloud-music-line',
-  //   color: '#e60026',
-  // },
-};
+export const socialConfig: SocialConfig = yamlConfig.social ?? {};
+
+// ICP filing config — normalize string shorthand to { text } object
+export const icpConfig: { text: string; link?: string } | undefined = (() => {
+  const raw = yamlConfig.site.icp;
+  if (!raw) return undefined;
+  if (typeof raw === 'string') return { text: raw };
+  return raw;
+})();
 
 const { title, alternate, subtitle } = siteConfig;
 
@@ -171,9 +219,12 @@ export const seoConfig = {
   url: siteConfig.site,
 };
 
-export const defaultCoverList = Array.from({ length: 21 }, (_, index) => index + 1).map((item) => `/img/cover/${item}.webp`);
+const BUILT_IN_COVERS = Array.from({ length: 21 }, (_, i) => `/img/cover/${i + 1}.webp`);
+export const defaultCoverList = yamlConfig?.defaultCoverList?.length ? yamlConfig.defaultCoverList : BUILT_IN_COVERS;
 
-// 圣诞特效配置类型
+// Analytics config — reuses AnalyticsConfig from config/types.ts
+
+// Christmas config types
 type ChristmasConfig = {
   enabled: boolean;
   features: {
@@ -187,19 +238,56 @@ type ChristmasConfig = {
     speed: number;
     intensity: number;
     mobileIntensity: number;
-    /** 桌面端最大层数，默认 4 */
     maxLayers: number;
-    /** 桌面端每层最大迭代次数，默认 6 */
     maxIterations: number;
-    /** 移动端最大层数，默认 2 */
     mobileMaxLayers: number;
-    /** 移动端每层最大迭代次数，默认 3 */
     mobileMaxIterations: number;
   };
 };
 
-// 圣诞特效配置
-export const christmasConfig: ChristmasConfig = {
+// Map YAML comment config
+export const commentConfig: CommentConfig = yamlConfig.comment || {};
+
+// Content config types
+type ContentConfig = {
+  addBlankTarget?: boolean;
+  smoothScroll?: boolean;
+  addHeadingLevel?: boolean;
+  enhanceCodeBlock?: boolean;
+  enableCodeCopy?: boolean;
+  enableCodeFullscreen?: boolean;
+  enableLinkEmbed?: boolean;
+  enableTweetEmbed?: boolean;
+  enableOGPreview?: boolean;
+  previewCacheTime?: number;
+  lazyLoadEmbeds?: boolean;
+  /** Post card image position: 'alternating' | 'left' | 'right' */
+  postCardImagePosition?: 'alternating' | 'left' | 'right';
+};
+
+// Map YAML content config
+export const contentConfig: ContentConfig = yamlConfig.content || {};
+
+// Map YAML analytics config
+export const analyticsConfig: AnalyticsConfig = yamlConfig.analytics || {};
+
+const _umami = analyticsConfig?.umami;
+
+/** Pre-computed site-wide pageview stats config. null when disabled or token missing. */
+export const umamiSiteStatsConfig: UmamiStatsConfig | null =
+  _umami?.enabled && _umami.statistics_display?.token && _umami.statistics_display?.footer_site_stats
+    ? createUmamiStatsConfig(_umami)
+    : null;
+
+/** Create per-page article stats config. Returns null when disabled or token missing. */
+export function createArticleStatsConfig(href: string): UmamiStatsConfig | null {
+  return _umami?.enabled && _umami.statistics_display?.token && _umami.statistics_display?.article_page_views
+    ? createUmamiStatsConfig(_umami, href)
+    : null;
+}
+
+// Map YAML christmas config with defaults
+export const christmasConfig: ChristmasConfig = yamlConfig.christmas || {
   enabled: false,
   features: {
     snowfall: true,
@@ -212,10 +300,78 @@ export const christmasConfig: ChristmasConfig = {
     speed: 0.5,
     intensity: 0.7,
     mobileIntensity: 0.4,
-    // 密度配置：层数 × 迭代次数 = 总迭代次数（原始值为 6×12=72）
     maxLayers: 6,
     maxIterations: 8,
     mobileMaxLayers: 4,
     mobileMaxIterations: 6,
   },
 };
+
+// Map YAML bgm config
+export const bgmConfig: { enabled: boolean; metingApi?: string; audio: BgmAudioGroup[] } = {
+  enabled: yamlConfig.bgm?.enabled ?? (yamlConfig.bgm?.audio?.length ?? 0) > 0,
+  metingApi: yamlConfig.bgm?.metingApi,
+  audio: yamlConfig.bgm?.audio ?? [],
+};
+
+// Bangumi media tracking config — null when disabled (section commented out in YAML)
+export const bangumiConfig: BangumiConfig | null = yamlConfig.bangumi ?? null;
+
+// Navigation routers with auto-injected bangumi entry
+export const routers: RouterItem[] = bangumiConfig
+  ? [
+      ...baseRouters,
+      {
+        name: bangumiConfig.label,
+        nameKey: bangumiConfig.label ? undefined : 'nav.bangumi',
+        path: '/bangumi',
+        icon: bangumiConfig.icon ?? 'ri:bilibili-fill',
+      },
+    ]
+  : baseRouters;
+
+// Map YAML dev tools config with defaults (dev only)
+export const devConfig: DevConfig = {
+  localProjectPath: yamlConfig.dev?.localProjectPath ?? '',
+  contentRelativePath: yamlConfig.dev?.contentRelativePath ?? 'src/content/blog',
+  editors: yamlConfig.dev?.editors ?? [],
+};
+
+// =============================================================================
+// i18n Configuration
+// =============================================================================
+
+export const i18nConfig: I18nConfig = yamlConfig.i18n ?? {
+  defaultLocale: 'zh',
+  locales: [{ code: 'zh', label: '中文' }],
+};
+
+// =============================================================================
+// Site Timezone
+// =============================================================================
+
+/**
+ * Site timezone in IANA format
+ * Falls back to 'Asia/Shanghai' if configured timezone is invalid
+ * @default 'Asia/Shanghai'
+ */
+export const siteTimezone: string = (() => {
+  const configuredTz = yamlConfig.site.timezone ?? DEFAULT_TIMEZONE;
+  if (!isValidTimezone(configuredTz)) {
+    console.warn(`[config] Invalid timezone "${configuredTz}", falling back to "${DEFAULT_TIMEZONE}"`);
+    return DEFAULT_TIMEZONE;
+  }
+  return configuredTz;
+})();
+
+// =============================================================================
+// Series Slugs (Pre-computed for navigation filtering)
+// =============================================================================
+
+/** All configured series slugs (lowercase) */
+export const configuredSeriesSlugs = new Set(siteConfig.featuredSeries.map((series) => series.slug.toLowerCase()));
+
+/** Only enabled series slugs (lowercase) */
+export const enabledSeriesSlugs = new Set(
+  siteConfig.featuredSeries.filter((series) => series.enabled !== false).map((series) => series.slug.toLowerCase()),
+);

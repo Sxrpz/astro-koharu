@@ -10,9 +10,11 @@ import { FloatingFocusManager, FloatingPortal, useClick, useDismiss, useInteract
 import { useControlledState } from '@hooks/useControlledState';
 import { useFloatingUI } from '@hooks/useFloatingUI';
 import type { Heading } from '@hooks/useHeadingTree';
+import { useTranslation } from '@hooks/useTranslation';
 import { AnimatePresence, motion } from 'motion/react';
 import type React from 'react';
 import { cloneElement } from 'react';
+import { cn } from '@/lib/utils';
 import { HeadingList } from '../TableOfContents/HeadingList';
 
 interface MobileTOCDropdownProps {
@@ -44,6 +46,7 @@ export function MobileTOCDropdown({
   onOpenChange,
   enableNumbering = true,
 }: MobileTOCDropdownProps) {
+  const { t } = useTranslation();
   const [isOpen, setIsOpen] = useControlledState({
     value: passedOpen,
     defaultValue: false,
@@ -86,7 +89,10 @@ export function MobileTOCDropdown({
                 transition={animation.spring.popoverContent}
                 {...getFloatingProps()}
               >
-                <nav className={`toc-container${enableNumbering ? '' : 'toc-no-numbering'}`} aria-label="文章目录">
+                <nav
+                  className={cn('toc-container vertical-scrollbar', { 'toc-no-numbering': !enableNumbering })}
+                  aria-label={t('toc.title')}
+                >
                   <div className="space-y-1">
                     <HeadingList
                       headings={headings}

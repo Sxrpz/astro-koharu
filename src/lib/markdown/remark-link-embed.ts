@@ -26,7 +26,8 @@ import { classifyLink, isStandaloneLinkParagraph } from './link-utils';
 
 const CACHE_DIR = path.join(process.cwd(), '.cache');
 const CACHE_FILE = path.join(CACHE_DIR, 'og-data.json');
-const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
+const DEFAULT_CACHE_TTL_DAYS = 30;
+const ERROR_CACHE_TTL = 1 * 24 * 60 * 60 * 1000; // 1 day for error entries (retry sooner)
 
 interface CacheEntry {
   data: OGData;
@@ -60,36 +61,53 @@ function loadCache(): CacheData {
 }
 
 /**
- * Save cache to file system
+ * Save cache to file system.
+ * Prunes expired entries before writing to keep the file lean (important
+ * because og-data.json is committed to git for Vercel build caching).
  */
-function saveCache(cache: CacheData): void {
+function saveCache(cache: CacheData, successTtl: number): void {
   try {
     if (!fs.existsSync(CACHE_DIR)) {
       fs.mkdirSync(CACHE_DIR, { recursive: true });
     }
-    fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
-    memoryCache = cache;
+    const now = Date.now();
+    const pruned: CacheData = {};
+    for (const [url, entry] of Object.entries(cache)) {
+      const ttl = entry.data.error ? ERROR_CACHE_TTL : successTtl;
+      if (now - entry.timestamp < ttl) {
+        pruned[url] = entry;
+      }
+    }
+    fs.writeFileSync(CACHE_FILE, `${JSON.stringify(pruned, null, 2)}\n`);
+    memoryCache = pruned;
   } catch (error) {
     console.warn('[Link Embed] Failed to save cache:', error);
   }
 }
 
 /**
- * Get cached OG data if valid
+ * Get cached OG data if valid.
+ * Error entries expire after 1 day; successful entries after `successTtl` ms.
  */
-function getCachedOGData(url: string): OGData | null {
+function getCachedOGData(url: string, successTtl: number): OGData | null {
   const cache = loadCache();
   const entry = cache[url];
+  if (!entry) return null;
 
-  if (entry && Date.now() - entry.timestamp < CACHE_TTL) {
+  const ttl = entry.data.error ? ERROR_CACHE_TTL : successTtl;
+  if (Date.now() - entry.timestamp < ttl) {
     return entry.data;
   }
 
   return null;
 }
 
+/** Whether the in-memory cache has unflushed changes */
+let cacheDirty = false;
+
 /**
- * Set OG data in cache
+ * Set OG data in memory cache (does NOT write to disk immediately).
+ * Call `flushCache()` after batch processing to persist.
  */
 function setCachedOGData(url: string, data: OGData): void {
   const cache = loadCache();
@@ -97,7 +115,16 @@ function setCachedOGData(url: string, data: OGData): void {
     data,
     timestamp: Date.now(),
   };
-  saveCache(cache);
+  cacheDirty = true;
+}
+
+/**
+ * Flush in-memory cache to disk if it has been modified.
+ */
+function flushCache(successTtl: number): void {
+  if (!cacheDirty || !memoryCache) return;
+  saveCache(memoryCache, successTtl);
+  cacheDirty = false;
 }
 
 interface OGData {
@@ -112,9 +139,11 @@ interface OGData {
 }
 
 interface RemarkLinkEmbedOptions {
+  enableLinkEmbed?: boolean;
   enableTweetEmbed?: boolean;
   enableCodePenEmbed?: boolean;
   enableOGPreview?: boolean;
+  previewCacheTime?: number;
 }
 
 // Initialize metascraper with plugins
@@ -313,13 +342,12 @@ function generateLinkPreviewHTML(ogData: OGData): string {
   const safeDomain = sanitizeText(domain);
   const safeLogo = logo ? sanitizeUrl(logo) : '';
   const safeImage = image ? sanitizeUrl(image) : '';
-  // console.log('ogData:%o', ogData);
   return `<div class="link-preview-block not-prose" data-state="success">
   <a href="${safeUrl}" target="_blank" class="group block overflow-hidden rounded-lg border border-border transition-all hover:border-primary/50 hover:shadow-md" aria-label="${safeTitle} - ${safeDomain}">
     <div class="bg-card flex md:flex-col flex-row">
       <div class="flex-1 p-4">
         <div class="mb-2 flex items-center gap-2">
-          ${safeLogo ? `<img src="${safeLogo}" alt="" class="h-4 w-4 shrink-0" loading="lazy" aria-hidden="true" />` : ''}
+          ${safeLogo ? `<img src="${safeLogo}" alt="" class="h-4 w-4 shrink-0" loading="lazy" aria-hidden="true" referrerpolicy="no-referrer" />` : ''}
           <span class="text-muted-foreground truncate text-xs font-medium">${safeDomain}</span>
         </div>
         <h3 class="text-foreground mb-2 line-clamp-2 font-semibold leading-tight">${safeTitle}</h3>
@@ -329,7 +357,7 @@ function generateLinkPreviewHTML(ogData: OGData): string {
           <svg class="h-3 w-3 shrink-0 transition-transform group-hover:translate-x-0.5" aria-hidden="true" viewBox="0 0 12 12"><path fill="currentColor" d="M4 3.5a.5.5 0 0 0-.5.5v4a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5v-.25a.75.75 0 0 1 1.5 0V8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h.25a.75.75 0 0 1 0 1.5zm2.75 0a.75.75 0 0 1 0-1.5h2.5a.75.75 0 0 1 .75.75v2.5a.75.75 0 0 1-1.5 0v-.69L7.28 5.78a.75.75 0 0 1-1.06-1.06L7.44 3.5z"/></svg> 
         </div>
       </div>
-      ${safeImage ? `<div class="bg-muted relative md:w-full shrink-0 aspect-1200/630 h-38"><img src="${safeImage}" alt="${safeTitle}" class="h-full w-full object-cover" loading="lazy" /></div>` : ''}
+      ${safeImage ? `<div class="bg-muted relative md:w-full shrink-0 aspect-1200/630 md:aspect-auto md:max-h-48 w-80"><img src="${safeImage}" alt="${safeTitle}" class="link-preview-image h-full md:h-full w-full object-cover" loading="lazy" referrerpolicy="no-referrer" data-fallback-title="${safeTitle}" /></div>` : ''}
     </div>
   </a>
 </div>`;
@@ -355,9 +383,32 @@ function generateCodePenEmbedHTML(user: string, penId: string, url: string): str
  * This version uses metascraper to fetch OG data at build time
  */
 export function remarkLinkEmbed(options: RemarkLinkEmbedOptions = {}) {
-  const { enableTweetEmbed = true, enableCodePenEmbed = true, enableOGPreview = true } = options;
+  const {
+    enableLinkEmbed = true,
+    enableTweetEmbed = true,
+    enableCodePenEmbed = true,
+    enableOGPreview = true,
+    previewCacheTime = DEFAULT_CACHE_TTL_DAYS,
+  } = options;
+
+  // v4.x BREAKING: previewCacheTime unit changed from seconds to days.
+  // Warn legacy values (e.g. 3600 from seconds-era config) instead of silently
+  // caching for ~10 years.
+  if (previewCacheTime > 365) {
+    console.warn(
+      `[Link Embed] previewCacheTime=${previewCacheTime} looks unusually large. ` +
+        `Unit changed from seconds to days in v4.x — please update config/site.yaml.`,
+    );
+  }
+
+  const successTtl = previewCacheTime * 24 * 60 * 60 * 1000;
 
   return async (tree: Root) => {
+    // Skip processing if link embedding is disabled or no specific embed types are enabled
+    if (!enableLinkEmbed || (!enableTweetEmbed && !enableCodePenEmbed && !enableOGPreview)) {
+      return;
+    }
+
     const nodesToReplace: Array<{
       node: Paragraph;
       index: number;
@@ -400,7 +451,6 @@ export function remarkLinkEmbed(options: RemarkLinkEmbedOptions = {}) {
           value: `<div data-tweet-embed data-tweet-id="${tweetId}"></div>`,
         };
       } else if (type === 'codepen' && enableCodePenEmbed && codepen) {
-        console.log(`[Link Embed] Embedding CodePen: ${codepen.user}/${codepen.penId}`);
         const html = generateCodePenEmbedHTML(codepen.user, codepen.penId, url);
         return {
           type: 'html' as const,
@@ -408,9 +458,8 @@ export function remarkLinkEmbed(options: RemarkLinkEmbedOptions = {}) {
         };
       } else if (type === 'general' && enableOGPreview) {
         // Check cache first
-        const cachedData = getCachedOGData(url);
+        const cachedData = getCachedOGData(url, successTtl);
         if (cachedData) {
-          console.log(`[Link Embed] Using cached OG data for: ${url}`);
           const html = generateLinkPreviewHTML(cachedData);
           return {
             type: 'html' as const,
@@ -419,7 +468,6 @@ export function remarkLinkEmbed(options: RemarkLinkEmbedOptions = {}) {
         }
 
         // Fetch and cache
-        console.log(`[Link Embed] Fetching OG data for: ${url}`);
         const ogData = await fetchOGData(url);
         setCachedOGData(url, ogData);
         const html = generateLinkPreviewHTML(ogData);
@@ -433,6 +481,9 @@ export function remarkLinkEmbed(options: RemarkLinkEmbedOptions = {}) {
 
     // Wait for all fetches to complete in parallel
     const embedNodes = await Promise.all(fetchPromises);
+
+    // Flush cache to disk once per markdown file (instead of per-URL)
+    flushCache(successTtl);
 
     // Replace nodes with their embed counterparts
     nodesToReplace.forEach(({ index, parent }, i) => {

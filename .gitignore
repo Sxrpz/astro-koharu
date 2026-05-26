@@ -1,11 +1,12 @@
 # build output
 dist/
+.sonda/
 
 # generated types
 .astro/
 
 # dependencies
-node_modules/
+node_modules
 
 # logs
 npm-debug.log*
@@ -20,6 +21,7 @@ pnpm-debug.log*
 
 # vercel
 .vercel
+.superset
 
 # macOS-specific files
 .DS_Store
@@ -29,4 +31,9 @@ pnpm-debug.log*
 .vscode/
 
 # Transformers.js model cache
-.cache/
+.cache/*
+# Keep OG data cache for Vercel builds
+!.cache/og-data.json
+
+# Backup files
+backups/

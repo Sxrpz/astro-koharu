@@ -3,6 +3,7 @@
  *
  * Hook for detecting the current page theme state by monitoring
  * the `dark` class on `document.documentElement`.
+ * Uses useSyncExternalStore for optimal React 18+ compatibility.
  *
  * Note: This is different from `usePrefersColorSchemeDark()` which
  * monitors the user's system preference. This hook monitors the actual
@@ -17,7 +18,7 @@
  * ```
  */
 
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 
 /**
  * Hook for detecting current page theme
@@ -25,33 +26,27 @@ import { useEffect, useState } from 'react';
  * @returns Whether the page is currently in dark mode
  */
 export function useIsDarkTheme(): boolean {
-  const [isDark, setIsDark] = useState(false);
-
-  useEffect(() => {
-    // Initialize with current theme state
-    const updateTheme = () => {
-      setIsDark(document.documentElement.classList.contains('dark'));
-    };
-
-    updateTheme();
-
-    // Watch for class changes on documentElement
-    const observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
-          updateTheme();
-          break;
-        }
+  return useSyncExternalStore(
+    (callback) => {
+      // Ensure we're in browser environment
+      if (typeof document === 'undefined') {
+        return () => {};
       }
-    });
 
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class'],
-    });
-
-    return () => observer.disconnect();
-  }, []);
-
-  return isDark;
+      const observer = new MutationObserver(callback);
+      observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['class'],
+      });
+      return () => observer.disconnect();
+    },
+    () => {
+      // Get current snapshot
+      if (typeof document === 'undefined') {
+        return false;
+      }
+      return document.documentElement.classList.contains('dark');
+    },
+    () => false, // SSR snapshot - always false
+  );
 }

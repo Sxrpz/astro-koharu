@@ -47,6 +47,7 @@ astro-koharu is an Astro-based blog rebuilt from Hexo, inspired by the Shoka the
 - **Keep CLAUDE.md updated**: Ask to update when making architectural changes
 - **Run lint before completion**: `pnpm lint:fix` must pass before completing tasks
 - **Check for dead code**: Run `pnpm knip` periodically
+- **Build cache**: `.cache/og-data.json` is intentionally committed to Git for build acceleration (OG metadata cache for link embeds). Do NOT add it to `.gitignore`. Other files under `.cache/` (transformers models, summaries-cache) are already ignored.
 
 ## Development Commands
 
@@ -59,16 +60,26 @@ pnpm build            # Build for production
 pnpm preview          # Preview production build
 pnpm check            # Run Astro type checking
 
-# Content Generation
-pnpm generate:lqips           # Generate image placeholders
-pnpm generate:similarities    # Generate semantic similarity vectors
-pnpm generate:summaries       # Generate AI summaries (incremental)
-
 # Linting & Code Quality
 pnpm lint             # Run Biome linter and formatter
 pnpm lint:fix         # Auto-fix linting issues
 pnpm knip             # Find unused files/dependencies
+
+# Koharu CLI (Interactive TUI)
+pnpm koharu              # Interactive menu
+pnpm koharu backup       # Backup blog content and config (--full for complete backup)
+pnpm koharu restore      # Restore from backup (--latest, --dry-run, --force)
+pnpm koharu update       # Update theme from upstream (--check, --skip-backup, --force, --rebase, --clean)
+pnpm koharu generate     # Generate content assets (interactive menu)
+pnpm koharu generate lqips        # Generate LQIP image placeholders
+pnpm koharu generate similarities # Generate semantic similarity vectors
+pnpm koharu generate summaries    # Generate AI summaries (--model, --force)
+pnpm koharu generate all          # Generate all content assets
+pnpm koharu clean        # Clean old backups (--keep N to retain N most recent)
+pnpm koharu list         # List all backups
 ```
+
+**Note on Configuration Changes:** After modifying `config/site.yaml`, restart the dev server or rebuild. The YAML configuration is cached during build for performance.
 
 ## Architecture
 
@@ -76,6 +87,7 @@ pnpm knip             # Find unused files/dependencies
 - **Framework**: Astro 5.x with React integration
 - **Styling**: Tailwind CSS 4.x with plugins
 - **Content**: Astro Content Collections (`src/content/blog/`)
+- **i18n**: Custom translation system (`src/i18n/`) with Astro i18n routing
 - **Animations**: Motion (Framer Motion successor)
 - **State**: Nanostores
 - **Search**: Pagefind (static)
@@ -85,9 +97,10 @@ pnpm knip             # Find unused files/dependencies
 ```plain
 src/
 ├── components/   # React & Astro components
-├── content/blog/ # Markdown/MDX posts
+├── content/blog/ # Markdown/MDX posts (translations under <locale>/ subdirs)
+├── i18n/         # Internationalization (translations, config, utils)
 ├── layouts/      # Page layouts
-├── pages/        # File-based routing
+├── pages/        # File-based routing ([lang]/ mirrors for non-default locales)
 ├── lib/          # Utility functions
 ├── hooks/        # React hooks
 ├── constants/    # Config, router, animations
@@ -128,7 +141,21 @@ pages/ → components/ → hooks/ → lib/ → constants/
 
 **Content System**: Blog posts in `src/content/blog/` using Astro Content Collections. Hierarchical categories supporting `'工具'` or `['笔记', '前端', 'React']`.
 
+**Featured Series**: Special category-based content series with dedicated pages and homepage highlights. Configured via `featuredSeries` in `config/site.yaml`. Each series requires a unique `slug` (must not conflict with reserved routes) and `categoryName`. Supports multiple series, individual enable/disable, and homepage highlight control. Dynamic routes generated at `[seriesSlug].astro`.
+
+**Bangumi Page**: Optional media tracking page integrating [Bangumi API](https://api.bgm.tv). Configured via `bangumi` section in `config/site.yaml` — comment out to disable (page + navigation auto-hidden). Data fetched client-side in React (`BangumiCollection` component with `client:load`). Types in `src/types/bangumi.ts`, API client in `src/lib/bangumi/`, data hook in `src/hooks/useBangumiData.ts`. Navigation item auto-injected via `routers` in `src/constants/site-config.ts`.
+
 **Theme System**: Dark/light toggle with localStorage, inline check in `<head>` prevents FOUC.
+
+**i18n System**: Two-layer translation architecture with locale-aware routing.
+- **UI strings** (`src/i18n/translations/`): TypeScript dictionaries with `t(locale, key, params?)` function. Keys defined in `zh.ts` (source-of-truth), other locales are partial overrides. ~170 keys.
+- **Content strings** (`config/i18n-content.yaml`): YAML-based translations for category names, series fields, featured category labels. Accessed via `getContentCategoryName()` / `getContentSeriesField()` / `getContentFeaturedCategoryField()` (internal to `src/lib/content/categories.ts`).
+- **Routing**: Default locale has no URL prefix; other locales use `/<locale>/` prefix. Static pages in `src/pages/[lang]/` are thin wrappers using `getLocaleStaticPaths()`. Dynamic pages (post, tags, categories, series) have per-locale `getStaticPaths`. Root pages derive locale from URL via `getLocaleFromUrl()`.
+- **React hook**: `useTranslation()` reads from `$locale` nanostore (synced via `astro:page-load` event). Returns `{ t, locale }`.
+- **Content locale**: Posts in `src/content/blog/<locale>/` are detected by slug prefix (`getSlugLocaleInfo()`); `filterPostsByLocale()` provides fallback — non-default locales show translations + untranslated default-locale posts.
+- **Locale config**: `enabled` flag in `config/site.yaml` allows disabling locales without removing content. `isI18nEnabled` controls conditional Astro i18n routing.
+- **`localizedPath(path, locale?)`** defaults to `defaultLocale` — no need for `locale ?? defaultLocale` at call sites.
+- **Do NOT enable Astro `fallback`** in `astro.config.mjs` — it breaks `[seriesSlug].astro` dynamic routes.
 
 **Markdown**: Shiki highlighting, auto-generated heading IDs/links via rehype plugins, GFM support.
 
@@ -199,6 +226,7 @@ Biome (line width: 128, single quotes, trailing commas). Tailwind classes must b
 - Use `useMemo()` for expensive computations only
 - Use `useCallback()` only when passing to memoized children
 - Use `useSyncExternalStore` for scroll events (see `useCurrentHeading`)
+- **Avoid large props**: Never pass large data (like `body` content) as props. Pre-compute derived values (e.g., `wordCount`, `readingTime`) instead. Large props get serialized into HTML when passed to client components, causing page bloat.
 
 ### Code Reuse Patterns
 1. **Pure Functions** (`src/lib/`): Extract when used 2+ times

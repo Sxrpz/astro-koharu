@@ -23,9 +23,11 @@ import { glob } from 'glob';
 import matter from 'gray-matter';
 import { remark } from 'remark';
 import strip from 'strip-markdown';
+import { getNonDefaultLocaleGlobs } from './locale-filter';
 
 // --------- Configuration ---------
 const CONTENT_GLOB = 'src/content/blog/**/*.md';
+const NON_DEFAULT_LOCALE_GLOBS = getNonDefaultLocaleGlobs();
 const CACHE_FILE = '.cache/summaries-cache.json';
 const OUTPUT_FILE = 'src/assets/summaries.json';
 const CACHE_VERSION = '1';
@@ -35,11 +37,6 @@ const CACHE_VERSION = '1';
 const API_BASE_URL = 'http://127.0.0.1:1234/v1/';
 const API_KEY = 'lm-studio'; // LM Studio doesn't require a real key
 const DEFAULT_MODEL = 'qwen/qwen3-4b-2507';
-
-// Exclude patterns - posts matching these patterns won't get summaries
-const EXCLUDE_PATTERNS = [
-  'weekly-', // Exclude weekly newsletters
-];
 
 // --------- Parse CLI Arguments ---------
 function parseArgs(): { model: string; force: boolean } {
@@ -87,10 +84,6 @@ interface SummaryOutput {
 
 // --------- Utility Functions ---------
 
-function shouldExclude(slug: string): boolean {
-  return EXCLUDE_PATTERNS.some((pattern) => slug.includes(pattern));
-}
-
 function computeHash(content: string): string {
   return crypto.createHash('md5').update(content).digest('hex');
 }
@@ -129,9 +122,9 @@ async function getPlainText(markdown: string): Promise<string> {
 }
 
 function extractSlug(filePath: string, link?: string): string {
-  if (link) return link;
+  if (link) return link.toLowerCase();
   const relativePath = filePath.replace(/^src\/content\/blog\//, '').replace(/\.md$/, '');
-  return relativePath;
+  return relativePath.toLowerCase();
 }
 
 // --------- LLM API ---------
@@ -188,11 +181,12 @@ async function processFile(filePath: string): Promise<PostData | null> {
       return null;
     }
 
-    const slug = extractSlug(filePath, frontmatter.link as string | undefined);
-
-    if (shouldExclude(slug)) {
+    // Skip posts with excludeFromSummary: true in frontmatter
+    if (frontmatter.excludeFromSummary === true) {
       return null;
     }
+
+    const slug = extractSlug(filePath, frontmatter.link as string | undefined);
 
     const plainText = await getPlainText(body);
     const hash = computeHash(content);
@@ -260,7 +254,7 @@ async function main() {
     }
 
     // Find all markdown files
-    const files = await glob(CONTENT_GLOB);
+    const files = await glob(CONTENT_GLOB, { ignore: NON_DEFAULT_LOCALE_GLOBS });
     if (!files.length) {
       console.log(chalk.yellow('No content files found.'));
       return;

@@ -8,6 +8,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import './theme-toggle.css';
 
 /**
  * Hook to manage theme state
@@ -43,19 +44,12 @@ function useTheme() {
   }, []);
 
   const applyTheme = useCallback((dark: boolean) => {
-    const rootElement = document.documentElement;
+    const root = document.documentElement;
+    const theme = dark ? 'dark' : 'light';
 
-    if (dark) {
-      rootElement.classList.add('dark');
-      rootElement.classList.remove('light');
-      rootElement.dataset.theme = 'dark'; // For astro-mermaid autoTheme
-      localStorage.setItem('theme', 'dark');
-    } else {
-      rootElement.classList.remove('dark');
-      rootElement.classList.add('light');
-      rootElement.dataset.theme = 'light'; // For astro-mermaid autoTheme
-      localStorage.setItem('theme', 'light');
-    }
+    root.classList.toggle('dark', dark);
+    root.dataset.theme = theme; // For astro-mermaid autoTheme
+    localStorage.setItem('theme', theme);
   }, []);
 
   const toggle = useCallback(() => {
@@ -110,7 +104,6 @@ export default function ThemeToggle({ className }: ThemeToggleProps) {
   return (
     <button
       className={`theme-toggle scale-80 cursor-pointer transition duration-300 hover:scale-90 ${className || ''}`}
-      tabIndex={0}
       aria-label="toggle theme"
       onKeyDown={handleKeyDown}
       type="button"
@@ -119,81 +112,6 @@ export default function ThemeToggle({ className }: ThemeToggleProps) {
         <input type="checkbox" className="hidden" checked={isDark} onChange={handleChange} />
         <div className="toggle-indicator" />
       </label>
-
-      <style>{`
-        :root {
-          --theme-toggle-color: currentColor;
-        }
-
-        .theme-toggle {
-          z-index: 10;
-        }
-
-        .toggle-indicator {
-          border-radius: 50%;
-          width: 36px;
-          height: 36px;
-          position: relative;
-          box-shadow: inset 16px -16px 0 0 var(--theme-toggle-color, #ffbb52);
-          transform: scale(1) rotate(-2deg);
-          transition:
-            box-shadow 0.5s ease 0s,
-            transform 0.4s ease 0.1s;
-        }
-
-        .toggle-indicator:before {
-          content: '';
-          width: inherit;
-          height: inherit;
-          border-radius: inherit;
-          position: absolute;
-          left: 0;
-          top: 0;
-          background: transparent;
-          transition: background 0.3s ease;
-        }
-
-        .toggle-indicator:after {
-          content: '';
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          margin: -4px 0 0 -4px;
-          position: absolute;
-          top: 50%;
-          left: 50%;
-          box-shadow:
-            0 -23px 0 var(--theme-toggle-color, #ffbb52),
-            0 23px 0 var(--theme-toggle-color, #ffbb52),
-            23px 0 0 var(--theme-toggle-color, #ffbb52),
-            -23px 0 0 var(--theme-toggle-color, #ffbb52),
-            15px 15px 0 var(--theme-toggle-color, #ffbb52),
-            -15px 15px 0 var(--theme-toggle-color, #ffbb52),
-            15px -15px 0 var(--theme-toggle-color, #ffbb52),
-            -15px -15px 0 var(--theme-toggle-color, #ffbb52);
-          transform: scale(0);
-          transition: all 0.3s ease;
-        }
-
-        /* Dark mode (moon) */
-        input:checked + .toggle-indicator {
-          box-shadow: inset 32px -32px 0 0 var(--theme-background-color, #17181c);
-          transform: scale(0.5) rotate(0deg);
-          transition:
-            transform 0.3s ease 0.1s,
-            box-shadow 0.2s ease 0s;
-        }
-
-        input:checked + .toggle-indicator:before {
-          background: var(--theme-toggle-color, #ffbb52);
-          transition: background 0.3s ease 0.1s;
-        }
-
-        input:checked + .toggle-indicator:after {
-          transform: scale(1.5);
-          transition: transform 0.5s ease 0.15s;
-        }
-      `}</style>
     </button>
   );
 }

@@ -20,6 +20,7 @@
  * ```
  */
 
+import { lockHeadingTo } from '@lib/heading-scroll-lock';
 import { useCallback } from 'react';
 import { findHeadingById, getParentIds, getSiblingIds, type Heading } from './useHeadingTree';
 
@@ -35,6 +36,11 @@ export interface UseHeadingClickHandlerOptions {
  *
  * @param options - 配置选项
  * @returns 标题点击处理函数
+ *
+ * Note: The `headings` dependency is intentional. The headings array comes from useState
+ * in useHeadingTree, which provides a stable reference that only changes when the heading
+ * structure actually changes (e.g., page navigation). This ensures the handler updates
+ * when needed while avoiding unnecessary recreations during normal renders.
  */
 export function useHeadingClickHandler({ headings, setExpandedIds }: UseHeadingClickHandlerOptions): (id: string) => void {
   return useCallback(
@@ -42,6 +48,7 @@ export function useHeadingClickHandler({ headings, setExpandedIds }: UseHeadingC
       const element = document.getElementById(id);
       if (!element) return;
 
+      lockHeadingTo(id);
       element.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
       // 获取点击的标题节点

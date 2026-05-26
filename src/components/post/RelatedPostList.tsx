@@ -1,27 +1,28 @@
-import { useMemo } from 'react';
+import { useTranslation } from '@hooks/useTranslation';
+import { translateCategoryName } from '@lib/content/category-translate';
+import { encodeSlug } from '@lib/route';
+import { localizedPath } from '@/i18n';
 import { cn, shuffleArray } from '@/lib/utils';
-import type { RandomPostItem } from './RandomPostList';
+import type { PostRefWithCategory } from '@/types/blog';
 
 interface Props {
-  posts: RandomPostItem[];
-  fallbackPool: RandomPostItem[]; // Pool to randomly select from when no related posts
+  posts: PostRefWithCategory[];
+  fallbackPool: PostRefWithCategory[]; // Pool to randomly select from when no related posts
   fallbackCount: number; // Number of fallback posts to display
   startIndex?: number; // Starting index for fallback post numbering
+  locale?: string;
 }
 
-export default function RelatedPostList({ posts, fallbackPool, fallbackCount, startIndex = 6 }: Props) {
+export default function RelatedPostList({ posts, fallbackPool, fallbackCount, startIndex = 6, locale }: Props) {
+  const { t } = useTranslation();
   const hasRelatedPosts = posts.length > 0;
 
   // Shuffle fallback posts on client-side for fresh randomization
-  const fallbackPosts = useMemo(() => {
-    if (fallbackPool.length <= fallbackCount) {
-      return shuffleArray(fallbackPool);
-    }
-    return shuffleArray(fallbackPool).slice(0, fallbackCount);
-  }, [fallbackPool, fallbackCount]);
+  const fallbackPosts =
+    fallbackPool.length <= fallbackCount ? shuffleArray(fallbackPool) : shuffleArray(fallbackPool).slice(0, fallbackCount);
 
   const displayPosts = hasRelatedPosts ? posts : fallbackPosts;
-  const title = hasRelatedPosts ? '相关文章' : '';
+  const title = hasRelatedPosts ? t('post.relatedPosts') : '';
 
   if (displayPosts.length === 0) {
     return null;
@@ -34,12 +35,16 @@ export default function RelatedPostList({ posts, fallbackPool, fallbackCount, st
         {displayPosts.map((post, index) => (
           <a
             key={post.slug}
-            href={`/post/${post.link ?? post.slug}`}
+            href={localizedPath(`/post/${encodeSlug(post.link ?? post.slug)}`, locale)}
             className="group flex gap-3 rounded-md p-2 text-sm transition-colors duration-300 hover:bg-foreground/5 hover:text-primary"
           >
             <span className="shrink-0 font-mono text-foreground/30">{index + (hasRelatedPosts ? 1 : startIndex)}</span>
             <div className="flex min-w-0 flex-col gap-0.5">
-              {post.categoryName && <div className="truncate text-foreground/50 text-xs">{post.categoryName}</div>}
+              {post.categoryName && (
+                <div className="truncate text-foreground/50 text-xs">
+                  {locale ? translateCategoryName(post.categoryName, locale) : post.categoryName}
+                </div>
+              )}
               <div className="line-clamp-2 text-foreground/80 transition-colors group-hover:text-primary">{post.title}</div>
             </div>
           </a>

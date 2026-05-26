@@ -5,7 +5,9 @@
  * This maintains backward compatibility while organizing code better.
  */
 
-// Export category utilities
+// =============================================================================
+// Category Utilities
+// =============================================================================
 export {
   addCategoryRecursively,
   buildCategoryPath,
@@ -15,27 +17,50 @@ export {
   getCategoryList,
   getCategoryNameByLink,
   getParentCategory,
+  translateCategoryName,
+  translateSeriesField,
 } from './content/categories';
-// Export post utilities
+
+// =============================================================================
+// Locale Utilities
+// =============================================================================
+export { getPostLocale, getPostSlug } from './content/locale';
+// =============================================================================
+// Post Utilities
+// =============================================================================
 export {
+  // Core post functions
   getAdjacentSeriesPosts,
-  // Weekly/Featured series utilities
-  getLatestWeeklyPost,
-  getNonWeeklyPosts,
-  getNonWeeklyPostsBySticky,
+  // Featured series functions
+  getEnabledSeries,
+  getFeaturedCategoryNames,
+  getHomeHighlightedPosts,
+  getHomePagePosts,
+  getNonFeaturedPosts,
+  getNonFeaturedPostsBySticky,
+  getPostById,
   getPostCount,
   getPostDescription,
   getPostDescriptionWithSummary,
   getPostLastCategory,
+  // Reading time utility
+  getPostReadingTime,
   getPostSummary,
   getPostsByCategory,
+  getPostsBySeriesSlug,
   getPostsBySticky,
   getRandomPosts,
+  getSeriesBySlug,
   getSeriesPosts,
   getSortedPosts,
-  getWeeklyPosts,
 } from './content/posts';
-// Export tag utilities
-export { getAllTags, normalizeTag } from './content/tags';
-// Export types
+
+// =============================================================================
+// Tag Utilities
+// =============================================================================
+export { buildTagPath, getAllTags, normalizeTag, tagToSlug } from './content/tags';
+
+// =============================================================================
+// Types
+// =============================================================================
 export type { Category, CategoryListResult } from './content/types';

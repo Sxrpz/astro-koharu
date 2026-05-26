@@ -13,15 +13,17 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { env, type FeatureExtractionPipeline, pipeline } from '@huggingface/transformers';
+import { type DeviceType, env, type FeatureExtractionPipeline, pipeline } from '@huggingface/transformers';
 import chalk from 'chalk';
 import { glob } from 'glob';
 import matter from 'gray-matter';
 import { remark } from 'remark';
 import strip from 'strip-markdown';
+import { getNonDefaultLocaleGlobs } from './locale-filter';
 
 // --------- Configuration ---------
 const CONTENT_GLOB = 'src/content/blog/**/*.md';
+const NON_DEFAULT_LOCALE_GLOBS = getNonDefaultLocaleGlobs();
 const OUTPUT_FILE = 'src/assets/similarities.json';
 const TOP_N_SIMILAR = 5;
 const MODEL_NAME = 'Snowflake/snowflake-arctic-embed-m-v2.0';
@@ -37,12 +39,6 @@ const INCLUDE_BODY = false;
 // When enabled, uses AI summary for similarity calculation if available
 const USE_AI_SUMMARY = true;
 const SUMMARIES_FILE = 'src/assets/summaries.json';
-
-// Exclude patterns - posts matching these patterns won't be included in similarity calculations
-// They can still show related posts, but won't be recommended to other posts
-const EXCLUDE_PATTERNS = [
-  'weekly-', // Exclude weekly newsletters (FE Bits)
-];
 
 // Cache models locally
 env.cacheDir = './.cache/transformers';
@@ -70,13 +66,51 @@ interface SummaryEntry {
 
 type SummariesMap = Record<string, SummaryEntry>;
 
+const VALID_DEVICE_TYPES: DeviceType[] = [
+  'auto',
+  'gpu',
+  'cpu',
+  'wasm',
+  'webgpu',
+  'cuda',
+  'dml',
+  'webnn',
+  'webnn-npu',
+  'webnn-gpu',
+  'webnn-cpu',
+];
+const DEFAULT_DEVICE: DeviceType = 'cpu';
+
 // --------- Utility Functions ---------
 
+function isDeviceType(value: string): value is DeviceType {
+  return VALID_DEVICE_TYPES.includes(value as DeviceType);
+}
+
 /**
- * Check if a slug should be excluded from similarity calculations
+ * Parse CLI arguments
+ * Supported: --device <value>
  */
-function shouldExclude(slug: string): boolean {
-  return EXCLUDE_PATTERNS.some((pattern) => slug.includes(pattern));
+function parseArgs(argv: string[] = process.argv.slice(2)): { device: DeviceType } {
+  let device = DEFAULT_DEVICE;
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+
+    if (arg === '--device') {
+      const value = argv[i + 1];
+      if (!value || !isDeviceType(value)) {
+        throw new Error(`Invalid device type: ${value}. Valid options are: ${VALID_DEVICE_TYPES.join(', ')}`);
+      }
+      device = value;
+      i++;
+      continue;
+    }
+
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+
+  return { device };
 }
 
 /**
@@ -149,10 +183,10 @@ async function getPlainText(markdown: string): Promise<string> {
  * Extract slug from file path, with support for custom link field
  */
 function extractSlug(filePath: string, link?: string): string {
-  if (link) return link;
+  if (link) return link.toLowerCase();
   // Extract from path: src/content/blog/foo/bar.md -> foo/bar
   const relativePath = filePath.replace(/^src\/content\/blog\//, '').replace(/\.md$/, '');
-  return relativePath;
+  return relativePath.toLowerCase();
 }
 
 /**
@@ -172,12 +206,13 @@ async function processFile(filePath: string, summaries: SummariesMap): Promise<P
       return null;
     }
 
-    const slug = extractSlug(filePath, frontmatter.link as string | undefined);
-
-    // Skip excluded patterns (e.g., weekly newsletters)
-    if (shouldExclude(slug)) {
+    // Skip posts with excludeFromSummary: true in frontmatter
+    // These posts won't be included in similarity calculations
+    if (frontmatter.excludeFromSummary === true) {
       return null;
     }
+
+    const slug = extractSlug(filePath, frontmatter.link as string | undefined);
 
     // Use AI summary if available, otherwise use description
     const aiSummary = summaries[slug]?.summary;
@@ -288,9 +323,12 @@ async function main() {
   const startTime = Date.now();
 
   try {
+    const { device } = parseArgs();
+
     console.log(chalk.cyan('=== Semantic Similarity Generator ===\n'));
     console.log(chalk.gray(`Mode: ${INCLUDE_BODY ? 'title + description + body' : 'title + description only'}`));
-    console.log(chalk.gray(`AI Summary: ${USE_AI_SUMMARY ? 'enabled' : 'disabled'}\n`));
+    console.log(chalk.gray(`AI Summary: ${USE_AI_SUMMARY ? 'enabled' : 'disabled'}`));
+    console.log(chalk.gray(`Device: ${device ?? DEFAULT_DEVICE}\n`));
 
     // 1. Load AI summaries if enabled
     const summaries = await loadSummaries();
@@ -300,11 +338,11 @@ async function main() {
 
     // 2. Load the embedding model
     console.log(chalk.blue(`Loading model: ${MODEL_NAME}...`));
-    const extractor = await pipeline('feature-extraction', MODEL_NAME);
+    const extractor = await pipeline('feature-extraction', MODEL_NAME, { device });
     console.log(chalk.green('Model loaded!\n'));
 
     // 3. Find all markdown files
-    const files = await glob(CONTENT_GLOB);
+    const files = await glob(CONTENT_GLOB, { ignore: NON_DEFAULT_LOCALE_GLOBS });
     if (!files.length) {
       console.log(chalk.yellow('No content files found.'));
       return;
